@@ -79,14 +79,18 @@ const ensureCounterElement = (): HTMLSpanElement | null => {
   counter.id = COUNTER_ID;
 
   Object.assign(counter.style, {
-    fontSize: '11px',
-    opacity: '0.8',
-    marginRight: '8px',
+    fontSize: '16px',
+    opacity: '1.0',
+    marginRight: '12px',
     whiteSpace: 'nowrap',
   });
 
-  // システムバージョンの「左側」に挿入
-  versionEl.parentElement.insertBefore(counter, versionEl);
+  // SystemVersion_system-version__ygB5P の「先頭の子要素」として挿入
+  if (versionEl.firstChild) {
+    versionEl.insertBefore(counter, versionEl.firstChild);
+  } else {
+    versionEl.appendChild(counter);
+  }
 
   cleanupFns.push(() => {
     counter?.remove();
