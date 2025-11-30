@@ -2,7 +2,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const PLUGIN_NAME = 'growi-plugin-view-char-counter';
-const COUNTER_ID = 'growi-view-char-counter-floating';
+const COUNTER_ID = 'growi-view-char-counter';
 
 let observer: MutationObserver | null = null;
 const cleanupFns: (() => void)[] = [];
@@ -29,8 +29,8 @@ const isNodeInside = (parent: Element, node: Node | null): boolean => {
  */
 const findContentRoots = (): Element[] => {
   const selectors = [
-    '[data-testid="page-content"]', // v7 以降でよくあるテストID
-    '.wiki',                        // 旧来の GROWI でよくあるクラス
+    '[data-testid="page-content"]',
+    '.wiki',
     '.page-content',
     '.content-main',
   ];
@@ -45,37 +45,53 @@ const findContentRoots = (): Element[] => {
 };
 
 /**
- * フローティングの文字数カウンタ要素を取得 or 作成
+ * 画面右下のシステムバージョン要素を探す
+ * 今回教えてもらったクラス:
+ *   div.SystemVersion_system-version__ygB5P d-none d-md-flex ...
  */
-const ensureFloatingCounter = (): HTMLDivElement => {
-  let counter = document.getElementById(COUNTER_ID) as HTMLDivElement | null;
-  if (!counter) {
-    counter = document.createElement('div');
-    counter.id = COUNTER_ID;
+const findSystemVersionElement = (): Element | null => {
+  const selectors = [
+    'div.SystemVersion_system-version__ygB5P', // メイン
+    '.SystemVersion_system-version__ygB5P',    // 念のため
+  ];
 
-    Object.assign(counter.style, {
-      position: 'fixed',
-      right: '12px',
-      bottom: '12px',
-      zIndex: '9999',
-      fontSize: '12px',
-      opacity: '0.8',
-      padding: '6px 10px',
-      borderRadius: '4px',
-      backgroundColor: 'rgba(0, 0, 0, 0.6)',
-      color: '#fff',
-      pointerEvents: 'none',  // クリック透過
-      maxWidth: '50vw',
-      textAlign: 'right',
-      whiteSpace: 'nowrap',
-    });
-
-    document.body.appendChild(counter);
-
-    cleanupFns.push(() => {
-      counter?.remove();
-    });
+  for (const sel of selectors) {
+    const el = document.querySelector(sel);
+    if (el) return el;
   }
+  return null;
+};
+
+/**
+ * システムバージョンの左側に置く文字数カウンタ要素を取得 or 作成
+ */
+const ensureCounterElement = (): HTMLSpanElement | null => {
+  let counter = document.getElementById(COUNTER_ID) as HTMLSpanElement | null;
+  if (counter) return counter;
+
+  const versionEl = findSystemVersionElement();
+  if (!versionEl || !versionEl.parentElement) {
+    // システムバージョンがまだ DOM に無いときは何もしない
+    return null;
+  }
+
+  counter = document.createElement('span');
+  counter.id = COUNTER_ID;
+
+  Object.assign(counter.style, {
+    fontSize: '11px',
+    opacity: '0.8',
+    marginRight: '8px',
+    whiteSpace: 'nowrap',
+  });
+
+  // システムバージョンの「左側」に挿入
+  versionEl.parentElement.insertBefore(counter, versionEl);
+
+  cleanupFns.push(() => {
+    counter?.remove();
+  });
+
   return counter;
 };
 
@@ -83,11 +99,15 @@ const ensureFloatingCounter = (): HTMLDivElement => {
  * 文字数カウンタの表示を更新
  */
 const updateCounter = () => {
-  const counter = ensureFloatingCounter();
-
   // 本文ルートを最新化
   if (contentRoots.length === 0) {
     contentRoots = findContentRoots();
+  }
+
+  const counter = ensureCounterElement();
+  if (!counter) {
+    // システムバージョンがまだ描画されていない場合など
+    return;
   }
 
   if (contentRoots.length === 0) {
@@ -133,9 +153,9 @@ const startObserveView = () => {
   contentRoots = findContentRoots();
   updateCounter();
 
-  // SPA 遷移などで本文が差し替えられることがあるので監視
+  // SPA 遷移などで本文が差し替えられる・フッターが再描画されることがあるので監視
   observer = new MutationObserver((mutations) => {
-    let shouldUpdateRoots = false;
+    let shouldUpdate = false;
 
     for (const m of mutations) {
       m.addedNodes.forEach((node) => {
@@ -143,14 +163,16 @@ const startObserveView = () => {
 
         if (
           node.matches('[data-testid="page-content"], .wiki, .page-content, .content-main') ||
-          node.querySelector('[data-testid="page-content"], .wiki, .page-content, .content-main')
+          node.querySelector('[data-testid="page-content"], .wiki, .page-content, .content-main') ||
+          node.matches('div.SystemVersion_system-version__ygB5P') ||
+          node.querySelector('div.SystemVersion_system-version__ygB5P')
         ) {
-          shouldUpdateRoots = true;
+          shouldUpdate = true;
         }
       });
     }
 
-    if (shouldUpdateRoots) {
+    if (shouldUpdate) {
       contentRoots = findContentRoots();
       updateCounter();
     }
@@ -159,7 +181,6 @@ const startObserveView = () => {
   observer.observe(document.body, { childList: true, subtree: true });
 
   // キー入力・クリック・選択変化で更新
-  // （viewモードなので主に選択変化で動くはず）
   document.addEventListener('keyup', updateCounter);
   document.addEventListener('mouseup', updateCounter);
   document.addEventListener('selectionchange', updateCounter);
