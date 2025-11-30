@@ -2,10 +2,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const PLUGIN_NAME = 'growi-plugin-view-char-counter';
-const COUNTER_CLASS = 'growi-view-char-counter';
+const COUNTER_ID = 'growi-view-char-counter-floating';
 
 let observer: MutationObserver | null = null;
 const cleanupFns: (() => void)[] = [];
+
+// ページ本文のルート候補を覚えておく
+let contentRoots: Element[] = [];
 
 /**
  * node が親要素 parent の中に含まれているかを判定
@@ -21,76 +24,8 @@ const isNodeInside = (parent: Element, node: Node | null): boolean => {
 };
 
 /**
- * ページ本文(root)に文字数カウンタをアタッチ
- */
-const attachCharCounterToView = (contentRoot: Element) => {
-  // すでに付いていれば何もしない
-  if (contentRoot.querySelector(`.${COUNTER_CLASS}`)) return;
-
-  // カウンタ用の <div>
-  const counter = document.createElement('div');
-  counter.className = COUNTER_CLASS;
-
-  Object.assign(counter.style, {
-    fontSize: '12px',
-    opacity: '0.7',
-    padding: '4px 8px',
-    marginTop: '8px',
-    textAlign: 'right',
-    borderTop: '1px solid rgba(0,0,0,0.1)',
-  });
-
-  // 本文の直下に付ける（必要なら parentElement に付けてもOK）
-  contentRoot.appendChild(counter);
-
-  const countChars = (s: string) => s.length;
-  // Unicode コードポイント基準にしたければ:
-  // const countChars = (s: string) => Array.from(s).length;
-
-  const update = () => {
-    const fullText = contentRoot.textContent ?? '';
-
-    const sel = window.getSelection();
-    let selected = '';
-
-    if (sel && sel.rangeCount > 0) {
-      const range = sel.getRangeAt(0);
-      if (isNodeInside(contentRoot, range.commonAncestorContainer)) {
-        selected = sel.toString();
-      }
-    }
-
-    if (selected.length > 0) {
-      counter.textContent = `選択中: ${countChars(selected)} 文字 / ページ全体: ${countChars(fullText)} 文字`;
-    } else {
-      counter.textContent = `ページ全体: ${countChars(fullText)} 文字`;
-    }
-  };
-
-  const handler = () => update();
-
-  // ページ本文内のクリックやキー入力時に更新
-  contentRoot.addEventListener('keyup', handler);
-  contentRoot.addEventListener('mouseup', handler);
-  // 選択変化は document レベルで監視
-  document.addEventListener('selectionchange', handler);
-
-  // 初期表示
-  update();
-
-  // deactivate() 用のクリーンアップを登録
-  cleanupFns.push(() => {
-    contentRoot.removeEventListener('keyup', handler);
-    contentRoot.removeEventListener('mouseup', handler);
-    document.removeEventListener('selectionchange', handler);
-    counter.remove();
-  });
-};
-
-/**
- * view モードの本文ルートを探して、カウンタを付ける
- * GROWI のバージョンによりクラス名が微妙に違う場合があるので、
- * いくつか候補を試している
+ * view モードの本文ルートを探す
+ * GROWI のバージョンによりクラス名が違うことがあるので、いくつか候補を試す
  */
 const findContentRoots = (): Element[] => {
   const selectors = [
@@ -109,39 +44,136 @@ const findContentRoots = (): Element[] => {
   return [];
 };
 
-const startObserveView = () => {
-  // すでに表示されているページにも付ける
-  const roots = findContentRoots();
-  roots.forEach((root) => attachCharCounterToView(root));
+/**
+ * フローティングの文字数カウンタ要素を取得 or 作成
+ */
+const ensureFloatingCounter = (): HTMLDivElement => {
+  let counter = document.getElementById(COUNTER_ID) as HTMLDivElement | null;
+  if (!counter) {
+    counter = document.createElement('div');
+    counter.id = COUNTER_ID;
 
-  // SPA 遷移で本文が差し替えられることがあるので監視
+    Object.assign(counter.style, {
+      position: 'fixed',
+      right: '12px',
+      bottom: '12px',
+      zIndex: '9999',
+      fontSize: '12px',
+      opacity: '0.8',
+      padding: '6px 10px',
+      borderRadius: '4px',
+      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+      color: '#fff',
+      pointerEvents: 'none',  // クリック透過
+      maxWidth: '50vw',
+      textAlign: 'right',
+      whiteSpace: 'nowrap',
+    });
+
+    document.body.appendChild(counter);
+
+    cleanupFns.push(() => {
+      counter?.remove();
+    });
+  }
+  return counter;
+};
+
+/**
+ * 文字数カウンタの表示を更新
+ */
+const updateCounter = () => {
+  const counter = ensureFloatingCounter();
+
+  // 本文ルートを最新化
+  if (contentRoots.length === 0) {
+    contentRoots = findContentRoots();
+  }
+
+  if (contentRoots.length === 0) {
+    counter.textContent = 'ページ全体: 0 文字';
+    return;
+  }
+
+  // ページ全体テキスト（本文ルート全体）
+  const fullText = contentRoots
+    .map((root) => root.textContent ?? '')
+    .join('\n');
+
+  const countChars = (s: string) => s.length;
+  // Unicode コードポイント基準にしたい場合:
+  // const countChars = (s: string) => Array.from(s).length;
+
+  const sel = window.getSelection();
+  let selected = '';
+
+  if (sel && sel.rangeCount > 0) {
+    const range = sel.getRangeAt(0);
+    // selection が本文のどれかのルート内にあるときだけカウント対象にする
+    const insideAny = contentRoots.some((root) =>
+      isNodeInside(root, range.commonAncestorContainer),
+    );
+    if (insideAny) {
+      selected = sel.toString();
+    }
+  }
+
+  if (selected.length > 0) {
+    counter.textContent = `選択中: ${countChars(selected)} 文字 / ページ全体: ${countChars(fullText)} 文字`;
+  } else {
+    counter.textContent = `ページ全体: ${countChars(fullText)} 文字`;
+  }
+};
+
+/**
+ * view モード用の監視を開始
+ */
+const startObserveView = () => {
+  // 初期の本文ルートとカウンタ更新
+  contentRoots = findContentRoots();
+  updateCounter();
+
+  // SPA 遷移などで本文が差し替えられることがあるので監視
   observer = new MutationObserver((mutations) => {
+    let shouldUpdateRoots = false;
+
     for (const m of mutations) {
       m.addedNodes.forEach((node) => {
         if (!(node instanceof Element)) return;
 
-        // 追加された要素自身が本文のルート
         if (
-          node.matches('[data-testid="page-content"], .wiki, .page-content, .content-main')
+          node.matches('[data-testid="page-content"], .wiki, .page-content, .content-main') ||
+          node.querySelector('[data-testid="page-content"], .wiki, .page-content, .content-main')
         ) {
-          attachCharCounterToView(node);
+          shouldUpdateRoots = true;
         }
-
-        // 追加された要素の配下に本文ルートがある場合
-        node
-          .querySelectorAll?.('[data-testid="page-content"], .wiki, .page-content, .content-main')
-          .forEach((el) => attachCharCounterToView(el));
       });
+    }
+
+    if (shouldUpdateRoots) {
+      contentRoots = findContentRoots();
+      updateCounter();
     }
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
+
+  // キー入力・クリック・選択変化で更新
+  // （viewモードなので主に選択変化で動くはず）
+  document.addEventListener('keyup', updateCounter);
+  document.addEventListener('mouseup', updateCounter);
+  document.addEventListener('selectionchange', updateCounter);
+
+  cleanupFns.push(() => {
+    document.removeEventListener('keyup', updateCounter);
+    document.removeEventListener('mouseup', updateCounter);
+    document.removeEventListener('selectionchange', updateCounter);
+  });
 };
 
 const activate = (): void => {
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
-  // 必要なら location.pathname で「/admin」「/login」等を除外してもよい
   startObserveView();
 };
 
